@@ -1,0 +1,74 @@
+name: build-scan-and-push
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  security-events: write
+
+jobs:
+  build_scan_push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Login to Azure using service principal (client secret)
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+
+      - name: Azure CLI - show account
+        run: az account show
+
+      - name: Build Docker image
+        run: |
+          IMAGE_TAG=${{ github.sha }}
+          docker build -t ${{ secrets.AZURE_CONTAINER_REGISTRY }}/sample-app:${IMAGE_TAG} .
+
+      # MSDO: Microsoft Security DevOps (includes Trivy as a tool)
+      - name: Run Microsoft Security DevOps
+        uses: microsoft/security-devops-action@latest
+        id: msdo
+        with:
+          categories: "containers"
+          tools: "trivy"
+
+      # Trivy standalone scan on the built image
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: '${{ secrets.AZURE_CONTAINER_REGISTRY }}/sample-app:${{ github.sha }}'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      # Microsoft Defender for DevOps
+      - name: Run Microsoft Defender for DevOps
+        uses: microsoft/security-devops-action@latest
+        id: defender
+        with:
+          categories: "IaC"
+
+      - name: Login to ACR
+        run: |
+          az acr login --name $(echo ${{ secrets.AZURE_CONTAINER_REGISTRY }} | cut -d'.' -f1)
+
+      - name: Push image to ACR
+        run: |
+          IMAGE_TAG=${{ github.sha }}
+          docker push ${{ secrets.AZURE_CONTAINER_REGISTRY }}/sample-app:${IMAGE_TAG}
