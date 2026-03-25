@@ -37,8 +37,6 @@ jobs:
       - name: MSDO Scan
         uses: DevOpsVyaspeeth/shared-actions/actions/msdo-scan@main
         id: msdo
-        with:
-          high-threshold: '1'
 
       # Step 3: Trivy scan on the built Docker image
       # Includes its own PR comment (header: trivy-scan) and security gate
@@ -47,7 +45,6 @@ jobs:
         id: trivy
         with:
           image-ref: ${{ steps.docker.outputs.image-ref }}
-          high-threshold: '1'
 
       # Step 4: Push to ACR only after scans pass
       - name: Docker Push to ACR
