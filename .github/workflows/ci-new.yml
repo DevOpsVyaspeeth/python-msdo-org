@@ -16,36 +16,8 @@ permissions:
   pull-requests: write
 
 jobs:
-  # Job 1: Build Docker image and save as artifact
-  docker-build:
-    runs-on: ubuntu-latest
-    outputs:
-      image_ref: ${{ steps.docker.outputs.image_ref }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Docker Build
-        uses: DevOpsVyaspeeth/shared-actions/actions/docker-build@main
-        id: docker
-        with:
-          acr-name: ${{ secrets.AZURE_CONTAINER_REGISTRY }}
-          image-name: 'sample-app'
-          image-tag: ${{ github.sha }}
-
-      - name: Save Docker image as artifact
-        run: |
-          docker save ${{ steps.docker.outputs.image_ref }} -o docker-image.tar
-
-      - name: Upload Docker image artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: docker-image
-          path: docker-image.tar
-          retention-days: 1
-
-  # Job 2: MSDO scan (source, Dockerfile, IaC, dependencies)
-  # Runs in PARALLEL with docker-build (does not need the image)
+  # Job 1: MSDO scan (source, Dockerfile, IaC, dependencies)
+  # Runs in PARALLEL with build-scan-push (does not need the Docker image)
   msdo-scan:
     runs-on: ubuntu-latest
     steps:
@@ -56,47 +28,37 @@ jobs:
         uses: DevOpsVyaspeeth/shared-actions/actions/msdo-scan@main
         id: msdo
 
-  # Job 3: Trivy scan on the built Docker image
-  # Needs the image from docker-build
-  trivy-scan:
+  # Job 2: Build Docker image → Trivy scan → Push to ACR
+  # All three share the same runner and Docker daemon — no artifact overhead
+  build-scan-push:
     runs-on: ubuntu-latest
-    needs: docker-build
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download Docker image artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: docker-image
-
-      - name: Load Docker image
+      - name: Set image ref
+        id: image
         run: |
-          docker load -i docker-image.tar
+          IMAGE_REF="${{ secrets.AZURE_CONTAINER_REGISTRY }}/sample-app:${{ github.sha }}"
+          echo "image_ref=${IMAGE_REF}" >> $GITHUB_OUTPUT
+
+      - name: Docker Build
+        uses: DevOpsVyaspeeth/shared-actions/actions/docker-build@main
+        with:
+          acr-name: ${{ secrets.AZURE_CONTAINER_REGISTRY }}
+          image-name: 'sample-app'
+          image-tag: ${{ github.sha }}
 
       - name: Trivy Scan
         uses: DevOpsVyaspeeth/shared-actions/actions/trivy-scan@main
         id: trivy
         with:
-          image-ref: ${{ needs.docker-build.outputs.image_ref }}
-
-  # Job 4: Push to ACR only after ALL scans pass
-  docker-push:
-    runs-on: ubuntu-latest
-    needs: [docker-build, msdo-scan, trivy-scan]
-    steps:
-      - name: Download Docker image artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: docker-image
-
-      - name: Load Docker image
-        run: |
-          docker load -i docker-image.tar
+          image-ref: ${{ steps.image.outputs.image_ref }}
 
       - name: Docker Push to ACR
+        if: success()
         uses: DevOpsVyaspeeth/shared-actions/actions/docker-push@main
         with:
           azure-creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
           acr-name: ${{ secrets.AZURE_CONTAINER_REGISTRY }}
-          image-ref: ${{ needs.docker-build.outputs.image_ref }}
+          image-ref: ${{ steps.image.outputs.image_ref }}
