@@ -121,11 +121,29 @@ jobs:
             echo "| **Total** | **${TRIVY_TOTAL}** |"
           } > pr-comment.md
 
+          # Export counts for gate step
+          echo "msdo_high=${MSDO_HIGH}" >> $GITHUB_OUTPUT
+          echo "trivy_high=${TRIVY_HIGH}" >> $GITHUB_OUTPUT
+
       - name: Post PR comment
         if: github.event_name == 'pull_request'
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           path: pr-comment.md
+
+      - name: Security gate - block PR on HIGH vulnerabilities
+        if: github.event_name == 'pull_request'
+        run: |
+          MSDO_HIGH=${{ steps.scan-summary.outputs.msdo_high || 0 }}
+          TRIVY_HIGH=${{ steps.scan-summary.outputs.trivy_high || 0 }}
+          THRESHOLD=1
+          echo "MSDO HIGH: ${MSDO_HIGH}, Trivy HIGH: ${TRIVY_HIGH}, Threshold: ${THRESHOLD}"
+          if [ "${MSDO_HIGH}" -gt "${THRESHOLD}" ] || [ "${TRIVY_HIGH}" -gt "${THRESHOLD}" ]; then
+            echo "::error::Security gate FAILED - HIGH vulnerability count exceeds threshold (${THRESHOLD})"
+            echo "MSDO HIGH: ${MSDO_HIGH}, Trivy HIGH: ${TRIVY_HIGH}"
+            exit 1
+          fi
+          echo "Security gate PASSED"
 
       - name: Login to ACR
         run: |
