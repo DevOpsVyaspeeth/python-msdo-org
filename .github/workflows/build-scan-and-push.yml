@@ -4,12 +4,16 @@ on:
   push:
     branches:
       - main
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
   contents: read
   id-token: write
   security-events: write
+  pull-requests: write
 
 jobs:
   build_scan_push:
@@ -66,6 +70,62 @@ jobs:
         with:
           sarif_file: 'trivy-results.sarif'
           category: 'trivy-image'
+
+      - name: Generate scan summary
+        if: github.event_name == 'pull_request'
+        id: scan-summary
+        run: |
+          # Parse MSDO SARIF
+          MSDO_SARIF="${{ steps.msdo.outputs.sarifFile }}"
+          if [ -f "$MSDO_SARIF" ]; then
+            MSDO_CRITICAL=$(jq '[.runs[].results[] | select(.level=="error" and (.properties."security-severity" // "0" | tonumber >= 9.0))] | length' "$MSDO_SARIF" 2>/dev/null || echo 0)
+            MSDO_HIGH=$(jq '[.runs[].results[] | select(.level=="error")] | length' "$MSDO_SARIF" 2>/dev/null || echo 0)
+            MSDO_MEDIUM=$(jq '[.runs[].results[] | select(.level=="warning")] | length' "$MSDO_SARIF" 2>/dev/null || echo 0)
+            MSDO_LOW=$(jq '[.runs[].results[] | select(.level=="note")] | length' "$MSDO_SARIF" 2>/dev/null || echo 0)
+            MSDO_TOTAL=$(jq '[.runs[].results[]] | length' "$MSDO_SARIF" 2>/dev/null || echo 0)
+          else
+            MSDO_CRITICAL=0; MSDO_HIGH=0; MSDO_MEDIUM=0; MSDO_LOW=0; MSDO_TOTAL=0
+          fi
+
+          # Parse Trivy SARIF
+          if [ -f "trivy-results.sarif" ]; then
+            TRIVY_CRITICAL=$(jq '[.runs[].results[] | select(.level=="error" and (.properties."security-severity" // "0" | tonumber >= 9.0))] | length' trivy-results.sarif 2>/dev/null || echo 0)
+            TRIVY_HIGH=$(jq '[.runs[].results[] | select(.level=="error")] | length' trivy-results.sarif 2>/dev/null || echo 0)
+            TRIVY_MEDIUM=$(jq '[.runs[].results[] | select(.level=="warning")] | length' trivy-results.sarif 2>/dev/null || echo 0)
+            TRIVY_LOW=$(jq '[.runs[].results[] | select(.level=="note")] | length' trivy-results.sarif 2>/dev/null || echo 0)
+            TRIVY_TOTAL=$(jq '[.runs[].results[]] | length' trivy-results.sarif 2>/dev/null || echo 0)
+          else
+            TRIVY_CRITICAL=0; TRIVY_HIGH=0; TRIVY_MEDIUM=0; TRIVY_LOW=0; TRIVY_TOTAL=0
+          fi
+
+          # Build comment body (no leading spaces so markdown renders correctly)
+          {
+            echo "## Security Scan Summary"
+            echo ""
+            echo "### MSDO (Source & IaC Scan)"
+            echo "| Severity | Count |"
+            echo "|----------|-------|"
+            echo "| Critical | ${MSDO_CRITICAL} |"
+            echo "| High | ${MSDO_HIGH} |"
+            echo "| Medium | ${MSDO_MEDIUM} |"
+            echo "| Low | ${MSDO_LOW} |"
+            echo "| **Total** | **${MSDO_TOTAL}** |"
+            echo ""
+            echo "### Trivy (Docker Image Scan)"
+            echo "| Severity | Count |"
+            echo "|----------|-------|"
+            echo "| Critical | ${TRIVY_CRITICAL} |"
+            echo "| High | ${TRIVY_HIGH} |"
+            echo "| Medium | ${TRIVY_MEDIUM} |"
+            echo "| Low | ${TRIVY_LOW} |"
+            echo "| **Total** | **${TRIVY_TOTAL}** |"
+          } > pr-comment.md
+
+      - name: Post PR comment
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          path: pr-comment.md
 
       - name: Login to ACR
         run: |
