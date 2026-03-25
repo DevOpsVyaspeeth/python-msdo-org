@@ -41,6 +41,13 @@ jobs:
           categories: "containers"
           tools: "trivy"
 
+      - name: Upload MSDO results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v4
+        continue-on-error: true
+        with:
+          sarif_file: ${{ steps.msdo.outputs.sarifFile }}
+          category: 'msdo-containers'
+
       # Trivy standalone scan on the built image
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0 - pinned to safe commit SHA
@@ -62,6 +69,13 @@ jobs:
         id: defender
         with:
           categories: "IaC"
+
+      - name: Upload Defender results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v4
+        continue-on-error: true
+        with:
+          sarif_file: ${{ steps.defender.outputs.sarifFile }}
+          category: 'msdo-iac'
 
       - name: Login to ACR
         run: |
