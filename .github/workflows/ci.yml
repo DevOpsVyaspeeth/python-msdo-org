@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  security-events: write
+  pull-requests: write
+
+jobs:
+  build-and-scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Docker Build and Push
+        uses: DevOpsVyaspeeth/shared-actions/actions/docker-build@main
+        id: docker
+        with:
+          azure-creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
+          acr-name: ${{ secrets.AZURE_CONTAINER_REGISTRY }}
+          image-name: 'sample-app'
+          image-tag: ${{ github.sha }}
+
+      - name: Security Scan
+        uses: DevOpsVyaspeeth/shared-actions/actions/security-scan@main
+        with:
+          image-ref: ${{ steps.docker.outputs.image-ref }}
+          high-threshold: '1'
