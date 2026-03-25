@@ -33,23 +33,22 @@ jobs:
           IMAGE_TAG=${{ github.sha }}
           docker build -t ${{ secrets.AZURE_CONTAINER_REGISTRY }}/sample-app:${IMAGE_TAG} .
 
-      # MSDO: Microsoft Security DevOps (includes Trivy as a tool)
+      # MSDO: Runs all tools (Trivy, checkov, Bandit, BinSkim, ESLint, templateanalyzer)
+      # Scans source code, Dockerfile, IaC, and dependencies
       - name: Run Microsoft Security DevOps
         uses: microsoft/security-devops-action@latest
         id: msdo
-        with:
-          categories: "containers"
-          tools: "trivy"
 
       - name: Upload MSDO results to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v4
         continue-on-error: true
         with:
           sarif_file: ${{ steps.msdo.outputs.sarifFile }}
-          category: 'msdo-containers'
+          category: 'msdo'
 
-      # Trivy standalone scan - table output (visible in GHA logs)
-      - name: Trivy vulnerability scan (table)
+      # Trivy standalone: scans the BUILT Docker image (OS packages + app deps)
+      # MSDO's Trivy only scans the filesystem, not the built image
+      - name: Trivy image scan (table)
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0 - pinned to safe commit SHA
         with:
           image-ref: '${{ secrets.AZURE_CONTAINER_REGISTRY }}/sample-app:${{ github.sha }}'
@@ -57,8 +56,7 @@ jobs:
           format: 'table'
           severity: 'CRITICAL,HIGH,MEDIUM'
 
-      # Trivy standalone scan - SARIF output for GitHub Security tab
-      - name: Trivy vulnerability scan (SARIF)
+      - name: Trivy image scan (SARIF)
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
         with:
           image-ref: '${{ secrets.AZURE_CONTAINER_REGISTRY }}/sample-app:${{ github.sha }}'
@@ -66,25 +64,12 @@ jobs:
           format: 'sarif'
           output: 'trivy-results.sarif'
 
-      - name: Upload Trivy results to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v4
-        continue-on-error: true # requires GHAS for private repos
-        with:
-          sarif_file: 'trivy-results.sarif'
-
-      # Microsoft Defender for DevOps
-      - name: Run Microsoft Defender for DevOps
-        uses: microsoft/security-devops-action@latest
-        id: defender
-        with:
-          categories: "IaC"
-
-      - name: Upload Defender results to GitHub Security tab
+      - name: Upload Trivy image results to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v4
         continue-on-error: true
         with:
-          sarif_file: ${{ steps.defender.outputs.sarifFile }}
-          category: 'msdo-iac'
+          sarif_file: 'trivy-results.sarif'
+          category: 'trivy-image'
 
       - name: Login to ACR
         run: |
