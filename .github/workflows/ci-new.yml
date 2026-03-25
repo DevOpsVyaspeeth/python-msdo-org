@@ -20,7 +20,7 @@ jobs:
   docker-build:
     runs-on: ubuntu-latest
     outputs:
-      image-ref: ${{ steps.docker.outputs.image-ref }}
+      image_ref: ${{ steps.docker.outputs.image_ref }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -35,7 +35,7 @@ jobs:
 
       - name: Save Docker image as artifact
         run: |
-          docker save ${{ steps.docker.outputs.image-ref }} -o docker-image.tar
+          docker save ${{ steps.docker.outputs.image_ref }} -o docker-image.tar
 
       - name: Upload Docker image artifact
         uses: actions/upload-artifact@v4
@@ -78,7 +78,7 @@ jobs:
         uses: DevOpsVyaspeeth/shared-actions/actions/trivy-scan@main
         id: trivy
         with:
-          image-ref: ${{ needs.docker-build.outputs.image-ref }}
+          image-ref: ${{ needs.docker-build.outputs.image_ref }}
 
   # Job 4: Push to ACR only after ALL scans pass
   docker-push:
@@ -99,4 +99,4 @@ jobs:
         with:
           azure-creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
           acr-name: ${{ secrets.AZURE_CONTAINER_REGISTRY }}
-          image-ref: ${{ needs.docker-build.outputs.image-ref }}
+          image-ref: ${{ needs.docker-build.outputs.image_ref }}
