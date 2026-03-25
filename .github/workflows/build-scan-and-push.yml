@@ -48,21 +48,17 @@ jobs:
 
       # Trivy standalone: scans the BUILT Docker image (OS packages + app deps)
       # MSDO's Trivy only scans the filesystem, not the built image
-      - name: Trivy image scan (table)
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0 - pinned to safe commit SHA
-        with:
-          image-ref: '${{ secrets.AZURE_CONTAINER_REGISTRY }}/sample-app:${{ github.sha }}'
-          version: 'v0.69.3'
-          format: 'table'
-          severity: 'CRITICAL,HIGH,MEDIUM'
+      - name: Install Trivy
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v0.69.3
 
-      - name: Trivy image scan (SARIF)
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
-        with:
-          image-ref: '${{ secrets.AZURE_CONTAINER_REGISTRY }}/sample-app:${{ github.sha }}'
-          version: 'v0.69.3'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
+      - name: Trivy image scan (table + SARIF)
+        run: |
+          IMAGE="${{ secrets.AZURE_CONTAINER_REGISTRY }}/sample-app:${{ github.sha }}"
+          echo "=== Trivy Table Output ==="
+          trivy image --severity CRITICAL,HIGH,MEDIUM --format table "$IMAGE"
+          echo "=== Generating SARIF ==="
+          trivy image --format sarif --output trivy-results.sarif "$IMAGE"
 
       - name: Upload Trivy image results to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v4
