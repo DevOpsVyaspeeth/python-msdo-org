@@ -1,16 +1,14 @@
 name: CI
 
 on:
-  push:
-    branches:
-      - main
   pull_request:
+    types: [closed]
     branches:
       - main
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
   security-events: write
   pull-requests: write
@@ -19,6 +17,7 @@ jobs:
   # Job 1: MSDO scan (source, Dockerfile, IaC, dependencies)
   # Runs in PARALLEL with build-scan-push (does not need the Docker image)
   msdo-scan:
+    if: github.event.pull_request.merged == true || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -31,15 +30,36 @@ jobs:
   # Job 2: Build Docker image → Trivy scan → Push to ACR
   # All three share the same runner and Docker daemon — no artifact overhead
   build-scan-push:
+    if: github.event.pull_request.merged == true || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    outputs:
+      semver: ${{ steps.semver.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Calculate semantic version
+        id: semver
+        run: |
+          LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | head -n1)
+          if [ -z "$LATEST_TAG" ]; then
+            NEW_VERSION="v0.1.0"
+          else
+            MAJOR=$(echo "$LATEST_TAG" | sed 's/v//' | cut -d. -f1)
+            MINOR=$(echo "$LATEST_TAG" | sed 's/v//' | cut -d. -f2)
+            PATCH=$(echo "$LATEST_TAG" | sed 's/v//' | cut -d. -f3)
+            PATCH=$((PATCH + 1))
+            NEW_VERSION="v${MAJOR}.${MINOR}.${PATCH}"
+          fi
+          echo "version=${NEW_VERSION}" >> $GITHUB_OUTPUT
+          echo "Calculated version: ${NEW_VERSION}"
 
       - name: Set image ref
         id: image
         run: |
-          IMAGE_REF="${{ secrets.AZURE_CONTAINER_REGISTRY }}/sample-app:${{ github.sha }}"
+          IMAGE_REF="${{ secrets.AZURE_CONTAINER_REGISTRY }}/sample-app:${{ steps.semver.outputs.version }}"
           echo "image_ref=${IMAGE_REF}" >> $GITHUB_OUTPUT
 
       - name: Docker Build
@@ -47,7 +67,7 @@ jobs:
         with:
           acr-name: ${{ secrets.AZURE_CONTAINER_REGISTRY }}
           image-name: 'sample-app'
-          image-tag: ${{ github.sha }}
+          image-tag: ${{ steps.semver.outputs.version }}
 
       - name: Trivy Scan
         uses: DevOpsVyaspeeth/shared-actions/actions/trivy-scan@main
@@ -62,3 +82,29 @@ jobs:
           azure-creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
           acr-name: ${{ secrets.AZURE_CONTAINER_REGISTRY }}
           image-ref: ${{ steps.image.outputs.image_ref }}
+
+      - name: Create and push git tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag ${{ steps.semver.outputs.version }}
+          git push origin ${{ steps.semver.outputs.version }}
+
+  # Job 3: Create GitHub Release with the semver tag
+  release:
+    needs: build-scan-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.build-scan-push.outputs.semver }}
+          name: Release ${{ needs.build-scan-push.outputs.semver }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
