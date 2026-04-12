@@ -127,19 +127,26 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
+            const critical = parseInt('${{ steps.parse-grype.outputs.critical }}') || 0;
+            const high = parseInt('${{ steps.parse-grype.outputs.high }}') || 0;
+            const medium = parseInt('${{ steps.parse-grype.outputs.medium }}') || 0;
+            const low = parseInt('${{ steps.parse-grype.outputs.low }}') || 0;
+            const total = parseInt('${{ steps.parse-grype.outputs.total }}') || 0;
+            const criticalPlusHigh = critical + high;
+            
             const comment = `## 🔍 Grype (Docker Image Scan)
             
             | Severity | Count |
             |----------|-------|
-            | Critical | ${{ steps.parse-grype.outputs.critical }} |
-            | High | ${{ steps.parse-grype.outputs.high }} |
-            | Medium | ${{ steps.parse-grype.outputs.medium }} |
-            | Low | ${{ steps.parse-grype.outputs.low }} |
-            | **Total** | **${{ steps.parse-grype.outputs.total }}** |
+            | Critical | ${critical} |
+            | High | ${high} |
+            | Medium | ${medium} |
+            | Low | ${low} |
+            | **Total** | **${total}** |
             
             ---
             📊 **Image:** \`${{ steps.image.outputs.image_ref }}\`
-            ⚠️ **Critical + High:** ${{ steps.parse-grype.outputs.critical }} + ${{ steps.parse-grype.outputs.high }} = **${{ steps.parse-grype.outputs.critical + steps.parse-grype.outputs.high }}**
+            ⚠️ **Critical + High:** ${critical} + ${high} = **${criticalPlusHigh}**
             `;
             
             github.rest.issues.createComment({
