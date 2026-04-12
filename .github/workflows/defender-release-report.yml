@@ -1,0 +1,145 @@
+name: Defender Scan → GitHub Release
+
+on:
+  repository_dispatch:
+    types: [defender-scan-completed]
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  update-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract event payload
+        id: payload
+        run: |
+          IMAGE_DIGEST="${{ github.event.client_payload.image_digest }}"
+          REGISTRY="${{ github.event.client_payload.registry }}"
+          REPOSITORY="${{ github.event.client_payload.repository }}"
+          TAG="${{ github.event.client_payload.tag }}"
+
+          echo "image_digest=${IMAGE_DIGEST}" >> $GITHUB_OUTPUT
+          echo "registry=${REGISTRY}" >> $GITHUB_OUTPUT
+          echo "repository=${REPOSITORY}" >> $GITHUB_OUTPUT
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+
+          echo "Image: ${REGISTRY}/${REPOSITORY}:${TAG}"
+          echo "Digest: ${IMAGE_DIGEST}"
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
+
+      - name: Query Defender findings from Azure Resource Graph
+        id: defender
+        run: |
+          SUBSCRIPTION_ID="${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          REGISTRY="${{ steps.payload.outputs.registry }}"
+          REPOSITORY="${{ steps.payload.outputs.repository }}"
+          TAG="${{ steps.payload.outputs.tag }}"
+          IMAGE_DIGEST="${{ steps.payload.outputs.image_digest }}"
+
+          # Query Azure Resource Graph for Defender container vulnerability assessments
+          # Assessment ID for container registry vulnerabilities
+          ASSESSMENT_ID="dbd0cb49-b563-45e7-9724-889e799fa648"
+
+          QUERY="securityresources
+          | where type == 'microsoft.security/assessments/subassessments'
+          | where id contains '${ASSESSMENT_ID}'
+          | extend imageDigest = tostring(properties.additionalData.imageDigest)
+          | extend registryHost = tostring(properties.additionalData.registryHost)
+          | extend repositoryName = tostring(properties.additionalData.repositoryName)
+          | where registryHost contains '$(echo ${REGISTRY} | cut -d. -f1)' and repositoryName == '${REPOSITORY}'
+          | extend cveId = tostring(properties.id)
+          | extend severity = tostring(properties.status.severity)
+          | extend description = tostring(properties.description)
+          | extend patchable = tostring(properties.additionalData.patchable)
+          | extend packageName = tostring(properties.additionalData.software.name)
+          | extend packageVersion = tostring(properties.additionalData.software.version)
+          | extend fixedVersion = tostring(properties.additionalData.software.fixedIn)
+          | project cveId, severity, packageName, packageVersion, fixedVersion, patchable, description
+          | order by severity asc"
+
+          RESULT=$(az graph query -q "${QUERY}" --subscriptions "${SUBSCRIPTION_ID}" -o json 2>/dev/null || echo '{"data":[]}')
+
+          # Count findings by severity
+          CRITICAL=$(echo "$RESULT" | jq '[.data[] | select(.severity == "Critical")] | length')
+          HIGH=$(echo "$RESULT" | jq '[.data[] | select(.severity == "High")] | length')
+          MEDIUM=$(echo "$RESULT" | jq '[.data[] | select(.severity == "Medium")] | length')
+          LOW=$(echo "$RESULT" | jq '[.data[] | select(.severity == "Low")] | length')
+          TOTAL=$(echo "$RESULT" | jq '.data | length')
+
+          echo "critical=${CRITICAL}" >> $GITHUB_OUTPUT
+          echo "high=${HIGH}" >> $GITHUB_OUTPUT
+          echo "medium=${MEDIUM}" >> $GITHUB_OUTPUT
+          echo "low=${LOW}" >> $GITHUB_OUTPUT
+          echo "total=${TOTAL}" >> $GITHUB_OUTPUT
+
+          echo "Defender Results — Critical: ${CRITICAL}, High: ${HIGH}, Medium: ${MEDIUM}, Low: ${LOW}, Total: ${TOTAL}"
+
+          # Build markdown table of top 20 findings
+          FINDINGS_TABLE=$(echo "$RESULT" | jq -r '
+            .data[:20] | 
+            ["| CVE | Severity | Package | Version | Fixed In | Patchable |",
+             "|-----|----------|---------|---------|----------|-----------|"] +
+            [.[] | "| \(.cveId) | \(.severity) | \(.packageName) | \(.packageVersion) | \(.fixedVersion // "N/A") | \(.patchable) |"]
+            | .[]')
+
+          # Write findings to file (handles multiline safely)
+          {
+            echo "---"
+            echo ""
+            echo "## Microsoft Defender Scan Results"
+            echo ""
+            echo "**Image:** \`${REGISTRY}/${REPOSITORY}:${TAG}\`"
+            echo "**Digest:** \`${IMAGE_DIGEST}\`"
+            echo "**Scanned:** $(date -u '+%Y-%m-%d %H:%M UTC')"
+            echo ""
+            echo "| Severity | Count |"
+            echo "|----------|-------|"
+            echo "| Critical | ${CRITICAL} |"
+            echo "| High | ${HIGH} |"
+            echo "| Medium | ${MEDIUM} |"
+            echo "| Low | ${LOW} |"
+            echo "| **Total** | **${TOTAL}** |"
+            echo ""
+            if [ "${TOTAL}" -gt 0 ]; then
+              echo "### Top Findings"
+              echo ""
+              echo "${FINDINGS_TABLE}"
+              echo ""
+              if [ "${TOTAL}" -gt 20 ]; then
+                echo "_Showing 20 of ${TOTAL} findings. View full results in Microsoft Defender for Cloud._"
+              fi
+            else
+              echo "_No vulnerabilities found by Microsoft Defender._"
+            fi
+          } > defender-report.md
+
+      - name: Update GitHub Release with Defender findings
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.payload.outputs.tag }}"
+
+          # Get existing release body
+          EXISTING_BODY=$(gh release view "${TAG}" --json body -q '.body' 2>/dev/null || echo "")
+
+          # Strip any previous Defender section (idempotent updates)
+          CLEAN_BODY=$(echo "${EXISTING_BODY}" | sed '/^---$/,/^_No vulnerabilities\|^_Showing/{/^---$/d;/./d}' || echo "${EXISTING_BODY}")
+
+          # Append Defender report
+          DEFENDER_REPORT=$(cat defender-report.md)
+          NEW_BODY="${CLEAN_BODY}
+          ${DEFENDER_REPORT}"
+
+          gh release edit "${TAG}" --notes "${NEW_BODY}"
+          echo "Updated release ${TAG} with Defender findings"
