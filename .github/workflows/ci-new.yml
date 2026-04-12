@@ -69,11 +69,27 @@ jobs:
           image-name: 'sample-app'
           image-tag: ${{ steps.semver.outputs.version }}
 
-      - name: Trivy Scan
-        uses: DevOpsVyaspeeth/shared-actions/actions/trivy-scan@main
-        id: trivy
+      # - name: Trivy Scan
+      #   uses: DevOpsVyaspeeth/shared-actions/actions/trivy-scan@main
+      #   id: trivy
+      #   with:
+      #     image-ref: ${{ steps.image.outputs.image_ref }}
+
+      - name: Grype Vulnerability Scan
+        id: grype-scan
+        uses: anchore/scan-action@v3
         with:
-          image-ref: ${{ steps.image.outputs.image_ref }}
+          image: ${{ steps.image.outputs.image_ref }}
+          fail-build: false
+          severity-cutoff: high
+          output-format: sarif
+
+      - name: Upload Grype SARIF Report
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ steps.grype-scan.outputs.sarif }}
+          category: grype-container-scan
 
       - name: Docker Push to ACR
         if: success()
