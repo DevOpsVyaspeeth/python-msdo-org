@@ -74,25 +74,26 @@ jobs:
       #   with:
       #     image-ref: ${{ steps.image.outputs.image_ref }}
 
-      - name: Grype Vulnerability Scan
+      - name: Install Grype
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Run Grype Vulnerability Scan
         id: grype-scan
-        uses: anchore/scan-action@v3
-        with:
-          image: ${{ steps.image.outputs.image_ref }}
-          fail-build: false
-          severity-cutoff: high
-          output-format: json
+        run: |
+          grype ${{ steps.image.outputs.image_ref }} -o json > grype-results.json || true
+          grype ${{ steps.image.outputs.image_ref }} -o table
 
       - name: Parse Grype Results
         if: always()
         id: parse-grype
         run: |
-          if [ -f "${{ steps.grype-scan.outputs.json }}" ]; then
-            CRITICAL=$(jq '[.matches[] | select(.vulnerability.severity == "Critical")] | length' "${{ steps.grype-scan.outputs.json }}")
-            HIGH=$(jq '[.matches[] | select(.vulnerability.severity == "High")] | length' "${{ steps.grype-scan.outputs.json }}")
-            MEDIUM=$(jq '[.matches[] | select(.vulnerability.severity == "Medium")] | length' "${{ steps.grype-scan.outputs.json }}")
-            LOW=$(jq '[.matches[] | select(.vulnerability.severity == "Low")] | length' "${{ steps.grype-scan.outputs.json }}")
-            TOTAL=$(jq '.matches | length' "${{ steps.grype-scan.outputs.json }}")
+          if [ -f "grype-results.json" ]; then
+            CRITICAL=$(jq '[.matches[] | select(.vulnerability.severity == "Critical")] | length' grype-results.json)
+            HIGH=$(jq '[.matches[] | select(.vulnerability.severity == "High")] | length' grype-results.json)
+            MEDIUM=$(jq '[.matches[] | select(.vulnerability.severity == "Medium")] | length' grype-results.json)
+            LOW=$(jq '[.matches[] | select(.vulnerability.severity == "Low")] | length' grype-results.json)
+            TOTAL=$(jq '.matches | length' grype-results.json)
             
             echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
             echo "high=$HIGH" >> $GITHUB_OUTPUT
@@ -125,7 +126,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: grype-vulnerability-report
-          path: ${{ steps.grype-scan.outputs.json }}
+          path: grype-results.json
           retention-days: 30
 
       - name: Check Vulnerability Threshold
