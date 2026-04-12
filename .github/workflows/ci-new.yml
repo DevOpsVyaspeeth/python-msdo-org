@@ -81,14 +81,64 @@ jobs:
           image: ${{ steps.image.outputs.image_ref }}
           fail-build: false
           severity-cutoff: high
-          output-format: sarif
+          output-format: json
 
-      - name: Upload Grype SARIF Report
+      - name: Parse Grype Results
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        id: parse-grype
+        run: |
+          if [ -f "${{ steps.grype-scan.outputs.json }}" ]; then
+            CRITICAL=$(jq '[.matches[] | select(.vulnerability.severity == "Critical")] | length' "${{ steps.grype-scan.outputs.json }}")
+            HIGH=$(jq '[.matches[] | select(.vulnerability.severity == "High")] | length' "${{ steps.grype-scan.outputs.json }}")
+            MEDIUM=$(jq '[.matches[] | select(.vulnerability.severity == "Medium")] | length' "${{ steps.grype-scan.outputs.json }}")
+            LOW=$(jq '[.matches[] | select(.vulnerability.severity == "Low")] | length' "${{ steps.grype-scan.outputs.json }}")
+            TOTAL=$(jq '.matches | length' "${{ steps.grype-scan.outputs.json }}")
+            
+            echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
+            echo "high=$HIGH" >> $GITHUB_OUTPUT
+            echo "medium=$MEDIUM" >> $GITHUB_OUTPUT
+            echo "low=$LOW" >> $GITHUB_OUTPUT
+            echo "total=$TOTAL" >> $GITHUB_OUTPUT
+          else
+            echo "critical=0" >> $GITHUB_OUTPUT
+            echo "high=0" >> $GITHUB_OUTPUT
+            echo "medium=0" >> $GITHUB_OUTPUT
+            echo "low=0" >> $GITHUB_OUTPUT
+            echo "total=0" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate Grype Summary
+        if: always()
+        run: |
+          echo "## Grype (Docker Image Scan)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Severity | Count |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Critical | ${{ steps.parse-grype.outputs.critical }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| High | ${{ steps.parse-grype.outputs.high }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Medium | ${{ steps.parse-grype.outputs.medium }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Low | ${{ steps.parse-grype.outputs.low }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Total** | **${{ steps.parse-grype.outputs.total }}** |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload Grype Results
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          sarif_file: ${{ steps.grype-scan.outputs.sarif }}
-          category: grype-container-scan
+          name: grype-vulnerability-report
+          path: ${{ steps.grype-scan.outputs.json }}
+          retention-days: 30
+
+      - name: Check Vulnerability Threshold
+        if: always()
+        run: |
+          CRITICAL=${{ steps.parse-grype.outputs.critical }}
+          HIGH=${{ steps.parse-grype.outputs.high }}
+          
+          if [ "$CRITICAL" != "0" ] || [ "$HIGH" != "0" ]; then
+            echo "::warning::Found $CRITICAL critical and $HIGH high severity vulnerabilities"
+            echo "::notice::Threshold check: Would fail on critical or high vulnerabilities in production"
+            # exit 1  # Uncomment to fail the build
+          fi
 
       - name: Docker Push to ACR
         if: success()
